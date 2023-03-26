@@ -1,3 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0
 
-obj-m := e1000.o
+obj-m := r4l_e1000_demo.o
