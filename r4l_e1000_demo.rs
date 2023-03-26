@@ -2,8 +2,10 @@
 
 //! Rust for linux e1000 driver demo
 
+use core::iter::Iterator;
+
 use kernel::prelude::*;
-use kernel::{pci, driver};
+use kernel::{pci, driver, bindings, c_str};
 
 mod consts;
 
@@ -18,18 +20,66 @@ module! {
     license: "GPL",
 }
 
+/// the private data for the adapter
+struct EtherDev {}
+
+impl driver::DeviceRemoval for EtherDev {
+    fn device_remove(&self) {
+        pr_info!("Rust for linux e1000 driver demo (device_remove)\n");
+    }
+}
+
 struct E1000Drv {}
 
 impl pci::Driver for E1000Drv {
+
+    // The Box type has implemented PointerWrapper trait.
+    type Data = Box<EtherDev>;
+
     kernel::define_pci_id_table! {(), [
         (pci::DeviceId::new(E1000_VENDER_ID, E1000_DEVICE_ID), None),
     ]}
 
-    type Data = ();
 
-    fn probe(_dev: &mut pci::Device, _id: core::option::Option<&Self::IdInfo>) -> Result<Self::Data> {
+    fn probe(dev: &mut pci::Device, _id: core::option::Option<&Self::IdInfo>) -> Result<Self::Data> {
         pr_info!("Rust for linux e1000 driver demo (probe)\n");
-        Ok(())
+
+
+        dev.enable_device()?;
+        
+        // this works like a filter, the PCI device may have up to 6 bars, those bars have different types,
+        // some of them are mmio, others are io-port based. The params to the following function is a 
+        // filter condition, and the return value is a mask indicating which of those bars are selected.
+        let bars = dev.select_bars(bindings::IORESOURCE_MEM as u64);
+
+        // ask the os to reserve the memory region of the selected bars.
+        dev.request_selected_regions(bars, c_str!("e1000 reserved memory"))?;
+
+        // get first resource
+        let res = dev.iter_resource().nth(0).ok_or(kernel::error::code::EIO)?;
+
+        // map device registers' hardware address to logical address so the kernel driver can access it.
+        let reg_addr = dev.map_resource(&res, res.len())?;
+
+        // test read the register, this test comes from https://pdos.csail.mit.edu/6.828/2011/labs/lab6/ Exercise 4.
+        let v = reg_addr.readl(0x0008)?;
+        pr_info!("read result: {}", v);
+        
+
+
+        
+        dev.set_master();
+
+        
+        // TODO pci_save_state(pdev); not supported by crate now, only have raw C bindings.
+
+        // TODO alloc_etherdev
+        
+        
+
+        Ok(Box::try_new(
+            EtherDev{}
+        )?)
     }
 
     fn remove(_data: &Self::Data) {
