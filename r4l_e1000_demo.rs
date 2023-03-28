@@ -114,24 +114,18 @@ impl net::DeviceOperations for NetDevice {
         dev.netif_carrier_off();
 
         // init dma memory for tx and rx
-        Self::e1000_setup_all_tx_resources(data)?;
+        let tx_ringbuf = Self::e1000_setup_all_tx_resources(data)?;
         let rx_ringbuf = Self::e1000_setup_all_rx_resources(data)?;
 
         // TODO e1000_power_up_phy() not implemented. It's used in case of PHY *MAY* power down,
         // which will not be supported in this MVP driver.
-
-
-        /* before we allocate an interrupt, we must be ready to handle it.
-        * Setting DEBUG_SHIRQ in the kernel makes it fire an interrupt
-        * as soon as we call pci_request_irq, so we have to setup our
-        * clean_rx handler before we do so.
-        */
         
-        data.e1000_hw_ops.e1000_configure(&rx_ringbuf)?;
+        data.e1000_hw_ops.e1000_configure(&rx_ringbuf, &tx_ringbuf)?;
 
+        data.napi.enable();
 
-
-        let _ = data.irq;
+        dev.netif_carrier_on();
+        dev.netif_start_queue();
 
 
         Ok(())
@@ -184,7 +178,7 @@ impl net::NapiPoller for NAPI {
         _dev: &net::Device,
         _data: &NetDevicePrvData,
     ) -> i32 {
-        let _ = _data.napi;
+        pr_info!("Rust for linux e1000 driver demo (napi poll)\n");
         todo!()
     }
 }

@@ -74,28 +74,40 @@ impl E1000Ops {
         Ok(())
     }
 
-    pub(crate) fn e1000_configure(&self, rx_ring: &RxRingBuf) -> Result {
+    pub(crate) fn e1000_configure(&self, rx_ring: &RxRingBuf, tx_ring: &TxRingBuf) -> Result {
         self.e1000_configure_rx(rx_ring)?;
+        self.e1000_configure_tx(tx_ring)?;
         Ok(())
     }
 
-    // fn e1000_set_rx_mode(&self) {
 
-    // }
-
-    // fn e1000_init_manageability(&self) {
-
-    // }
 
     fn e1000_configure_tx(&self, tx_ring: &TxRingBuf) -> Result {
         // According to Manual 14.5
 
-
+        // set ring buf head index, tail index and buf size
         self.mem_addr.writel(0, E1000_TDH)?;
         self.mem_addr.writel(0, E1000_TDT)?;
         self.mem_addr.writel((TX_RING_SIZE * 8) as u32, E1000_TDLEN)?;
+        // set ring buf start address
         self.mem_addr.writel(tx_ring.desc.dma_handle as u32, E1000_TDBAL)?;
         self.mem_addr.writel(0, E1000_TDBAH)?;
+
+        let tctl = (
+            E1000_TCTL_EN | 
+            E1000_TCTL_PSP |
+            0x10 << E1000_CT_SHIFT | 
+            0x40 << E1000_COLD_SHIFT
+        );
+        self.mem_addr.writel(tctl, E1000_TCTL)?;
+
+        let tipg = (
+            DEFAULT_82543_TIPG_IPGT_COPPER | 
+            DEFAULT_82543_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT |
+            DEFAULT_82543_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT
+        );
+        self.mem_addr.writel(tipg, E1000_TIPG)?;
+        
 
         Ok(())
 
@@ -122,6 +134,16 @@ impl E1000Ops {
         self.mem_addr.writel((RX_RING_SIZE * 8) as u32, E1000_RDLEN)?;
         self.mem_addr.writel(rx_ring.desc.dma_handle as u32, E1000_RDBAL)?;
         self.mem_addr.writel(0, E1000_RDBAH)?;
+
+        let rctl = (
+            E1000_RCTL_EN | 
+            E1000_RCTL_BAM | 
+            E1000_RCTL_SZ_2048 | 
+            E1000_RCTL_SECRC
+        );
+        self.mem_addr.writel(rctl, E1000_RCTL)?;
+
+        
         Ok(())
     }
 
