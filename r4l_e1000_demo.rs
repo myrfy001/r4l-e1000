@@ -2,8 +2,11 @@
 
 //! Rust for linux e1000 driver demo
 
+#![allow(unused)]
+
 use core::iter::Iterator;
 
+use hw_defs::{RxRingBuf, TxRingBuf};
 use kernel::pci::Resource;
 use kernel::prelude::*;
 use kernel::sync::Arc;
@@ -27,11 +30,11 @@ module! {
 }
 
 
+
 struct NetDevicePrvData {
     dev: Arc<device::Device>,
-
     napi: Arc<net::Napi>,
-    hw_addr: Arc<pci::MappedResource>,
+    e1000_hw_ops: E1000Ops,
     irq: u32,
 }
 
@@ -44,7 +47,7 @@ struct NetDevice {}
 
 
 impl NetDevice {
-    fn setup_tx_resource(data: &NetDevicePrvData) -> Result {
+    fn e1000_setup_all_tx_resources(data: &NetDevicePrvData) -> Result<TxRingBuf> {
 
         // Alloc dma memory space for tx desciptors
         let dma_desc = dma::Allocation::<hw_defs::TxDescEntry>::try_new(&*data.dev, TX_RING_SIZE, bindings::GFP_KERNEL)?;
@@ -64,10 +67,13 @@ impl NetDevice {
             desc.special = 0;
             desc.sta = 0;
         });
-        Ok(())
+        Ok(TxRingBuf{
+            desc:dma_desc,
+            buf:dma_buf,
+        })
     }
 
-    fn setup_rx_resource(data: &NetDevicePrvData) -> Result {
+    fn e1000_setup_all_rx_resources(data: &NetDevicePrvData) -> Result<RxRingBuf> {
 
         // Alloc dma memory space for rx desciptors
         let dma_desc = dma::Allocation::<hw_defs::RxDescEntry>::try_new(&*data.dev, RX_RING_SIZE, bindings::GFP_KERNEL)?;
@@ -86,7 +92,12 @@ impl NetDevice {
             desc.status = 0;
             desc.errors = 0;
         });
-        Ok(())
+
+
+        Ok(RxRingBuf{
+            desc:dma_desc,
+            buf:dma_buf,
+        })
     }
 
 
@@ -97,26 +108,41 @@ impl net::DeviceOperations for NetDevice {
     
     type Data = Box<NetDevicePrvData>;
 
-    fn open(_dev: &net::Device, data: <Self::Data as kernel::PointerWrapper>::Borrowed<'_>) -> Result {
+    fn open(dev: &net::Device, data: &NetDevicePrvData) -> Result {
         pr_info!("Rust for linux e1000 driver demo (net device open)\n");
 
+        dev.netif_carrier_off();
+
         // init dma memory for tx and rx
-        Self::setup_tx_resource(data)?;
-        Self::setup_rx_resource(data)?;
+        Self::e1000_setup_all_tx_resources(data)?;
+        let rx_ringbuf = Self::e1000_setup_all_rx_resources(data)?;
+
+        // TODO e1000_power_up_phy() not implemented. It's used in case of PHY *MAY* power down,
+        // which will not be supported in this MVP driver.
+
+
+        /* before we allocate an interrupt, we must be ready to handle it.
+        * Setting DEBUG_SHIRQ in the kernel makes it fire an interrupt
+        * as soon as we call pci_request_irq, so we have to setup our
+        * clean_rx handler before we do so.
+        */
+        
+        data.e1000_hw_ops.e1000_configure(&rx_ringbuf)?;
+
+
 
         let _ = data.irq;
-        let _ = data.hw_addr;
 
 
         Ok(())
     }
 
-    fn stop(_dev: &net::Device, _data: <Self::Data as kernel::PointerWrapper>::Borrowed<'_>) -> Result {
+    fn stop(_dev: &net::Device, _data: &NetDevicePrvData) -> Result {
         pr_info!("Rust for linux e1000 driver demo (net device stop)\n");
         Ok(())
     }
 
-    fn start_xmit(_skb: &net::SkBuff, _dev: &net::Device, _data: <Self::Data as kernel::PointerWrapper>::Borrowed<'_>,) -> net::NetdevTx {
+    fn start_xmit(_skb: &net::SkBuff, _dev: &net::Device, _data: &NetDevicePrvData) -> net::NetdevTx {
         pr_info!("Rust for linux e1000 driver demo (net device start_xmit)\n");
         net::NetdevTx::Ok
     }
@@ -228,44 +254,33 @@ impl pci::Driver for E1000Drv {
         // TODO implement C version `e1000_sw_init()`
 
         // TODO a lot of feature flags are assigned here in the C code, skip them for now.
-        let e1000_hw_ops =E1000Ops {
+        let e1000_hw_ops = E1000Ops {
             mem_addr: Arc::clone(&mem_addr),
             io_addr: Arc::clone(&io_addr),
         };
         e1000_hw_ops.e1000_reset_hw()?;
 
 
+        // TODO: the MAC address is hardcoded here, should be read out from EEPROM later.
+        netdev.eth_hw_addr_set(&MAC_HWADDR);
+
+        // TODO: Some background tasks and Wake on LAN are not supported now.
 
         let irq = dev.irq();
 
-        
-
-
-        
-        
-        netdev.eth_hw_addr_set(&MAC_HWADDR);
-
-
         let common_dev = device::Device::from_dev(dev);
 
-        
         netdev.netif_carrier_off();
 
-        
         netdev_reg.register(Box::try_new(
             NetDevicePrvData {
                 dev: Arc::try_new(common_dev)?,
-                hw_addr: Arc::clone(&mem_addr),
+                e1000_hw_ops,
                 napi: napi.into(),
                 irq,
             }
         )?)?;
 
-        
-
-        
-
-        
         
 
         Ok(Box::try_new(

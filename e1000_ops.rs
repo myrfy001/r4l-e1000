@@ -5,6 +5,8 @@ use kernel::sync::Arc;
 
 use core::time::Duration;
 
+use crate::hw_defs::{RxRingBuf, TxRingBuf};
+
 use crate::consts::*;
 
 pub(crate) struct E1000Ops {
@@ -71,4 +73,57 @@ impl E1000Ops {
         self.io_addr.outl(value, 4)?;
         Ok(())
     }
+
+    pub(crate) fn e1000_configure(&self, rx_ring: &RxRingBuf) -> Result {
+        self.e1000_configure_rx(rx_ring)?;
+        Ok(())
+    }
+
+    // fn e1000_set_rx_mode(&self) {
+
+    // }
+
+    // fn e1000_init_manageability(&self) {
+
+    // }
+
+    fn e1000_configure_tx(&self, tx_ring: &TxRingBuf) -> Result {
+        // According to Manual 14.5
+
+
+        self.mem_addr.writel(0, E1000_TDH)?;
+        self.mem_addr.writel(0, E1000_TDT)?;
+        self.mem_addr.writel((TX_RING_SIZE * 8) as u32, E1000_TDLEN)?;
+        self.mem_addr.writel(tx_ring.desc.dma_handle as u32, E1000_TDBAL)?;
+        self.mem_addr.writel(0, E1000_TDBAH)?;
+
+        Ok(())
+
+    }
+
+    // fn e1000_setup_rctl(&self) {
+
+    // }
+
+    fn e1000_configure_rx(&self, rx_ring: &RxRingBuf) -> Result {
+        // According to Manual 14.4
+
+        // According to MIT6.828 Exercise 10, hardcode to QEMU's MAC address.
+        self.mem_addr.writel(0x12005452, E1000_RA)?;      //RAL
+        self.mem_addr.writel(0x5534 | (1 << 31), E1000_RA + 4)?;  //RAH
+
+        for i in 0..128 {
+            self.mem_addr.writel(0, E1000_MTA + i * 4)?;
+        }
+
+        
+        self.mem_addr.writel(0, E1000_RDH)?;
+        self.mem_addr.writel(0, E1000_RDT)?;
+        self.mem_addr.writel((RX_RING_SIZE * 8) as u32, E1000_RDLEN)?;
+        self.mem_addr.writel(rx_ring.desc.dma_handle as u32, E1000_RDBAL)?;
+        self.mem_addr.writel(0, E1000_RDBAH)?;
+        Ok(())
+    }
+
+
 }

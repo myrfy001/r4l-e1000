@@ -1,3 +1,5 @@
+use kernel::dma;
+
 
 // Defined in intel chip manual section 3.3.3
 #[repr(C)]
@@ -22,3 +24,11 @@ pub(crate) struct RxDescEntry {
     pub(crate) errors: u8,
     pub(crate) special: u16,
 }
+
+pub(crate) struct RingBuf<T> {
+    pub(crate) desc: dma::Allocation::<T>,
+    pub(crate) buf: dma::Allocation::<u8>,
+}
+
+pub(crate) type RxRingBuf = RingBuf<RxDescEntry>;
+pub(crate) type TxRingBuf = RingBuf<TxDescEntry>;
