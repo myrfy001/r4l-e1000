@@ -4,12 +4,16 @@
 
 use core::iter::Iterator;
 
+use kernel::pci::Resource;
 use kernel::prelude::*;
 use kernel::sync::Arc;
 use kernel::{pci, device, driver, bindings, net, dma, c_str};
 
 mod consts;
 mod hw_defs;
+mod e1000_ops;
+
+use e1000_ops::E1000Ops;
 
 use consts::*;
 
@@ -161,6 +165,8 @@ impl net::NapiPoller for NAPI {
 
 struct E1000Drv {}
 
+
+
 impl pci::Driver for E1000Drv {
 
     // The Box type has implemented PointerWrapper trait.
@@ -174,24 +180,25 @@ impl pci::Driver for E1000Drv {
     fn probe(dev: &mut pci::Device, id: core::option::Option<&Self::IdInfo>) -> Result<Self::Data> {
         pr_info!("Rust for linux e1000 driver demo (probe): {:?}\n", id);
 
+        // Note: only support QEMU's 82540EM chip now.
         
         // this works like a filter, the PCI device may have up to 6 bars, those bars have different types,
         // some of them are mmio, others are io-port based. The params to the following function is a 
         // filter condition, and the return value is a mask indicating which of those bars are selected.
-        let bars = dev.select_bars(bindings::IORESOURCE_MEM as u64);
+        let bars = dev.select_bars((bindings::IORESOURCE_MEM | bindings::IORESOURCE_IO) as u64);
 
-        // the underlying will call `pci_enable_device()`, but the C version use `pci_enable_device_mem()`
-        // TODO: find the difference between the two
+        // the underlying will call `pci_enable_device()`. the R4L framework doesn't support `pci_enable_device_memory()` now.
         dev.enable_device()?;
 
-        // ask the os to reserve the memory region of the selected bars.
+        // ask the os to reserve the physical memory region of the selected bars.
         dev.request_selected_regions(bars, c_str!("e1000 reserved memory"))?;
 
         // set device to master mode.
         dev.set_master();
 
         // get resource(memory range) provided by BAR0
-        let res = dev.iter_resource().nth(0).ok_or(kernel::error::code::EIO)?;
+        let mem_res = dev.iter_resource().nth(0).ok_or(kernel::error::code::EIO)?;
+        let io_res = dev.iter_resource().skip(1).find(|r:&Resource|r.check_flags(bindings::IORESOURCE_IO)).ok_or(kernel::error::code::EIO)?;
 
         // TODO pci_save_state(pdev); not supported by crate now, only have raw C bindings.
 
@@ -200,7 +207,12 @@ impl pci::Driver for E1000Drv {
         let netdev = netdev_reg.dev_get();
 
         // map device registers' hardware address to logical address so the kernel driver can access it.
-        let hw_addr = Arc::try_new(dev.map_resource(&res, res.len())?)?;
+        let mem_addr = Arc::try_new(dev.map_resource(&mem_res, mem_res.len())?)?;
+
+        // get the io-port based address
+        let io_addr = Arc::try_new(pci::IoPort::try_new(&io_res)?)?;
+
+
 
         // TODO implement C version `e1000_init_hw_struct()`
 
@@ -216,8 +228,11 @@ impl pci::Driver for E1000Drv {
         // TODO implement C version `e1000_sw_init()`
 
         // TODO a lot of feature flags are assigned here in the C code, skip them for now.
-
-
+        let e1000_hw_ops =E1000Ops {
+            mem_addr: Arc::clone(&mem_addr),
+            io_addr: Arc::clone(&io_addr),
+        };
+        e1000_hw_ops.e1000_reset_hw()?;
 
 
 
@@ -240,7 +255,7 @@ impl pci::Driver for E1000Drv {
         netdev_reg.register(Box::try_new(
             NetDevicePrvData {
                 dev: Arc::try_new(common_dev)?,
-                hw_addr: Arc::clone(&hw_addr),
+                hw_addr: Arc::clone(&mem_addr),
                 napi: napi.into(),
                 irq,
             }
