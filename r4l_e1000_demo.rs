@@ -5,8 +5,8 @@
 #![allow(unused)]
 
 use core::iter::Iterator;
+use core::sync::atomic::AtomicPtr;
 
-use hw_defs::{RxRingBuf, TxRingBuf, TxDescEntry, RxDescEntry};
 use kernel::pci::Resource;
 use kernel::prelude::*;
 use kernel::sync::Arc;
@@ -14,6 +14,8 @@ use kernel::{pci, device, driver, bindings, net, dma, c_str};
 use kernel::device::RawDevice;
 use kernel::sync::SpinLock;
 
+
+use hw_defs::{RxRingBuf, TxRingBuf, TxDescEntry, RxDescEntry};
 mod consts;
 mod hw_defs;
 mod e1000_ops;
@@ -40,6 +42,7 @@ struct NetDevicePrvData {
     tx_ring: SpinLock<Option<TxRingBuf>>,
     rx_ring: SpinLock<Option<RxRingBuf>>,
     irq: u32,
+    _irq_handler: AtomicPtr<kernel::irq::Registration<E1000InterruptHandler>>
 }
 
 
@@ -63,7 +66,7 @@ impl NetDevice {
         let dma_buf = dma::Allocation::<u8>::try_new(&*data.dev, TX_RING_SIZE * RXTX_SINGLE_RING_BLOCK_SIZE, bindings::GFP_KERNEL)?;
         
         tx_ring.iter_mut().enumerate().for_each(|(idx, desc)| {
-            desc.buf_addr = (dma_buf.cpu_addr as usize + RXTX_SINGLE_RING_BLOCK_SIZE * idx) as u64;
+            desc.buf_addr = (dma_buf.dma_handle as usize + RXTX_SINGLE_RING_BLOCK_SIZE * idx) as u64;
             desc.cmd = 0;
             desc.length = 0;
             desc.cso = 0;
@@ -86,7 +89,7 @@ impl NetDevice {
         let dma_buf = dma::Allocation::<u8>::try_new(&*data.dev, RX_RING_SIZE * RXTX_SINGLE_RING_BLOCK_SIZE, bindings::GFP_KERNEL)?;
         
         rx_ring.iter_mut().enumerate().for_each(|(idx, desc)| {
-            desc.buf_addr = (dma_buf.cpu_addr as usize + RXTX_SINGLE_RING_BLOCK_SIZE * idx) as u64;
+            desc.buf_addr = (dma_buf.dma_handle as usize + RXTX_SINGLE_RING_BLOCK_SIZE * idx) as u64;
             desc.length = 0;
             desc.special = 0;
             desc.checksum = 0;
@@ -128,13 +131,18 @@ impl net::DeviceOperations for NetDevice {
         let irq_prv_data = Box::try_new(IrqPrivateData{
 
         })?;
+        
+        // Again, the `irq::Registration` contains an `irq::InternalRegistration` which implemented `Drop`, so 
+        // we mustn't let it dropped.
+        // TODO: there is memory leak now. 
         let req_reg = kernel::irq::Registration::<E1000InterruptHandler>::try_new(data.irq, irq_prv_data, kernel::irq::flags::SHARED, fmt!("{}",data.dev.name()))?;
+        data._irq_handler.store(Box::into_raw(Box::try_new(req_reg)?), core::sync::atomic::Ordering::Relaxed);
 
         data.napi.enable();
 
-        dev.netif_carrier_on();
         dev.netif_start_queue();
 
+        dev.netif_carrier_on();
 
         Ok(())
     }
@@ -154,8 +162,11 @@ impl net::DeviceOperations for NetDevice {
         let tx_ring = data.tx_ring.lock_irqdisable();
         let mut tdt = data.e1000_hw_ops.e1000_read_tx_queue_tail();
         let mut tdh = data.e1000_hw_ops.e1000_read_tx_queue_head();
+        let mut rdt = data.e1000_hw_ops.e1000_read_rx_queue_tail();
+        let mut rdh = data.e1000_hw_ops.e1000_read_rx_queue_head();
 
-        pr_info!("Rust for linux e1000 driver demo (net device start_xmit) tdt={}, tdh={}\n", tdt, tdh);
+        pr_info!("Rust for linux e1000 driver demo (net device start_xmit) tdt={}, tdh={}, rdt={}, rdh={}\n", tdt, tdh, rdt, rdh);
+        pr_info!("Interrupt State: {:x}", data.e1000_hw_ops.e1000_read_interrupt_state());
 
         /* On PCI/PCI-X HW, if packet size is less than ETH_ZLEN,
         * packets may get corrupted during padding by HW.
@@ -183,12 +194,12 @@ impl net::DeviceOperations for NetDevice {
         tdt = (tdt + 1) % TX_RING_SIZE as u32;
         data.e1000_hw_ops.e1000_write_tx_queue_tail(tdt);
 
-        
-        
-        skb.napi_consume(0);
+        dev.sent_queue(skb.len());
 
         
-
+        
+        skb.napi_consume(64);
+        dev.completed_queue(1, skb.len());
         
         net::NetdevTx::Ok
     }
@@ -351,6 +362,7 @@ impl pci::Driver for E1000Drv {
                 tx_ring,
                 rx_ring,
                 irq,
+                _irq_handler: AtomicPtr::new(core::ptr::null_mut()),
             }
         )?)?;
 
@@ -387,5 +399,12 @@ impl kernel::Module for E1000KernelMod {
 impl Drop for E1000KernelMod {
     fn drop(&mut self) {
         pr_info!("Rust for linux e1000 driver demo (exit)\n");
+    }
+}
+
+/// pr
+pub fn print_hex_dump(b:&[u8], l: usize) {
+    for x in &b[..l] {
+        pr_info!("{:x} ", x);
     }
 }

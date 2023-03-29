@@ -77,6 +77,9 @@ impl E1000Ops {
     pub(crate) fn e1000_configure(&self, rx_ring: &RxRingBuf, tx_ring: &TxRingBuf) -> Result {
         self.e1000_configure_rx(rx_ring)?;
         self.e1000_configure_tx(tx_ring)?;
+
+        // Enable related interrupts
+        self.mem_addr.writel(0x9C, E1000_IMS)?;
         Ok(())
     }
 
@@ -121,8 +124,9 @@ impl E1000Ops {
         // According to Manual 14.4
 
         // According to MIT6.828 Exercise 10, hardcode to QEMU's MAC address.
+        // 52:54:00:12:34:56
         self.mem_addr.writel(0x12005452, E1000_RA)?;      //RAL
-        self.mem_addr.writel(0x5534 | (1 << 31), E1000_RA + 4)?;  //RAH
+        self.mem_addr.writel(0x5634 | (1 << 31), E1000_RA + 4)?;  //RAH
 
         for i in 0..128 {
             self.mem_addr.writel(0, E1000_MTA + i * 4)?;
@@ -130,10 +134,10 @@ impl E1000Ops {
 
         
         self.mem_addr.writel(0, E1000_RDH)?;
-        self.mem_addr.writel(0, E1000_RDT)?;
+        self.mem_addr.writel((RX_RING_SIZE - 1) as u32, E1000_RDT)?;
         self.mem_addr.writel((RX_RING_SIZE * 16) as u32, E1000_RDLEN)?;
         self.mem_addr.writel(rx_ring.desc.dma_handle as u32, E1000_RDBAL)?;
-        self.mem_addr.writel(0, E1000_RDBAH)?;
+        // self.mem_addr.writel(0, E1000_RDBAH)?;
 
         let rctl = (
             E1000_RCTL_EN | 
@@ -143,8 +147,15 @@ impl E1000Ops {
         );
         self.mem_addr.writel(rctl, E1000_RCTL)?;
 
+        // Disable RDTR and RADV timer, since we use NAPI, we don't need hardware to help us decrease interrupts.
+        self.mem_addr.writel(0, E1000_RDTR)?;
+        self.mem_addr.writel(0, E1000_RADV)?;
         
         Ok(())
+    }
+
+    pub(crate) fn e1000_read_interrupt_state(&self) -> u32 {
+        self.mem_addr.readl(E1000_ICR).unwrap()
     }
 
     pub(crate) fn e1000_read_tx_queue_head(&self) -> u32 {
@@ -160,5 +171,18 @@ impl E1000Ops {
     }
 
 
+    pub(crate) fn e1000_read_rx_queue_head(&self) -> u32 {
+        self.mem_addr.readl(E1000_RDH).unwrap()
+    }
+
+    pub(crate) fn e1000_read_rx_queue_tail(&self) -> u32 {
+        self.mem_addr.readl(E1000_RDT).unwrap()
+    }
+
+    pub(crate) fn e1000_write_rx_queue_tail(&self, val: u32) {
+        self.mem_addr.writel(val, E1000_RDT).unwrap()
+    }
+
 
 }
+

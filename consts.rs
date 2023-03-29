@@ -3,7 +3,7 @@ pub(crate) const RX_RING_SIZE:usize = 8;
 pub(crate) const TX_RING_SIZE:usize = 8;
 pub(crate) const RXTX_SINGLE_RING_BLOCK_SIZE:usize = 16384;
 
-pub(crate) const MAC_HWADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x55];
+pub(crate) const MAC_HWADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 
 pub(crate) const E1000_VENDER_ID:u32 = 0x8086;
 pub(crate) const E1000_DEVICE_ID:u32 = 0x100E;
@@ -14,6 +14,7 @@ pub(crate) const E1000_DEVICE_ID:u32 = 0x100E;
 pub(crate) const E1000_CTRL:usize = 0x00000;	/* Device Control - RW */
 pub(crate) const E1000_STATUS:usize = 0x00008;	/* Device Status - RO */
 pub(crate) const E1000_IMC:usize = 0x000D8;	/* Interrupt Mask Clear - WO */
+pub(crate) const E1000_IMS:usize = 0x000D0;	/* Interrupt Mask Set - RW */
 pub(crate) const E1000_RCTL:usize = 0x00100;	/* RX Control - RW */
 pub(crate) const E1000_TCTL:usize = 0x00400;	/* TX Control - RW */
 pub(crate) const E1000_MANC:usize = 0x05820;	/* Management Control - RW */
@@ -33,8 +34,9 @@ pub(crate) const E1000_TDBAL:usize = 0x03800;	/* TX Descriptor Base Address Low 
 pub(crate) const E1000_TDBAH:usize = 0x03804;	/* TX Descriptor Base Address High - RW */
 pub(crate) const E1000_TIPG:usize = 0x00410;	/* TX Inter-packet gap -RW */
 
+pub(crate) const E1000_RDTR:usize = 0x02820;	/* RX Delay Timer - RW */
+pub(crate) const E1000_RADV:usize = 0x0282C;	/* RX Interrupt Absolute Delay Timer - RW */
 
-// pub(crate) const E1000_:usize = ;	/*  */
 // pub(crate) const E1000_:usize = ;	/*  */
 // pub(crate) const E1000_:usize = ;	/*  */
 // pub(crate) const E1000_:usize = ;	/*  */
@@ -94,6 +96,9 @@ pub(crate) const E1000_TIPG_IPGR2_SHIFT:u32 = 20;
 pub(crate) const E1000_TXD_STAT_DD:u32 = 0x00000001;	/* Descriptor Done */
 pub(crate) const E1000_TXD_CMD_RS:u32 = 0x08000000;	    /* Report Status */
 pub(crate) const E1000_TXD_CMD_EOP:u32 = 0x01000000;	/* End of Packet */
-// pub(crate) const E1000_:u32 = ;	/*  */
+
+
+/* Interrupt Cause Read Bits*/
+pub(crate) const E1000_ICR_RXT0:u32 = 0x00000080;	/* rx timer intr (ring 0) */
 // pub(crate) const E1000_:u32 = ;	/*  */
 // pub(crate) const E1000_:u32 = ;	/*  */
