@@ -1,7 +1,7 @@
 
-pub(crate) const RX_RING_SIZE:usize = 256;
-pub(crate) const TX_RING_SIZE:usize = 256;
-pub(crate) const RXTX_SINGLE_RING_BLOCK_SIZE:usize = 2048;
+pub(crate) const RX_RING_SIZE:usize = 8;
+pub(crate) const TX_RING_SIZE:usize = 8;
+pub(crate) const RXTX_SINGLE_RING_BLOCK_SIZE:usize = 16384;
 
 pub(crate) const MAC_HWADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x55];
 
@@ -70,7 +70,8 @@ pub(crate) const E1000_RCTL_SECRC:u32 = 0x04000000;	/* Strip Ethernet CRC */
 
 pub(crate) const E1000_CTRL_RST:u32 = 0x04000000;	/* Global reset */
 pub(crate) const E1000_MANC_ARP_EN:u32 = 0x00002000;	/* Enable ARP Request Filtering */
-// pub(crate) const E1000_:u32 = ;	/*  */
+
+
 // pub(crate) const E1000_:u32 = ;	/*  */
 // pub(crate) const E1000_:u32 = ;	/*  */
 // pub(crate) const E1000_:u32 = ;	/*  */
@@ -87,3 +88,12 @@ pub(crate) const E1000_TIPG_IPGR1_SHIFT:u32 = 10;
 pub(crate) const DEFAULT_82543_TIPG_IPGR2:u32 = 6;
 pub(crate) const E1000_TIPG_IPGR2_SHIFT:u32 = 20;
 
+
+
+/* Transmit Descriptor bit definitions */
+pub(crate) const E1000_TXD_STAT_DD:u32 = 0x00000001;	/* Descriptor Done */
+pub(crate) const E1000_TXD_CMD_RS:u32 = 0x08000000;	    /* Report Status */
+pub(crate) const E1000_TXD_CMD_EOP:u32 = 0x01000000;	/* End of Packet */
+// pub(crate) const E1000_:u32 = ;	/*  */
+// pub(crate) const E1000_:u32 = ;	/*  */
+// pub(crate) const E1000_:u32 = ;	/*  */

@@ -6,11 +6,13 @@
 
 use core::iter::Iterator;
 
-use hw_defs::{RxRingBuf, TxRingBuf};
+use hw_defs::{RxRingBuf, TxRingBuf, TxDescEntry, RxDescEntry};
 use kernel::pci::Resource;
 use kernel::prelude::*;
 use kernel::sync::Arc;
 use kernel::{pci, device, driver, bindings, net, dma, c_str};
+use kernel::device::RawDevice;
+use kernel::sync::SpinLock;
 
 mod consts;
 mod hw_defs;
@@ -35,6 +37,8 @@ struct NetDevicePrvData {
     dev: Arc<device::Device>,
     napi: Arc<net::Napi>,
     e1000_hw_ops: E1000Ops,
+    tx_ring: SpinLock<Option<TxRingBuf>>,
+    rx_ring: SpinLock<Option<RxRingBuf>>,
     irq: u32,
 }
 
@@ -65,12 +69,9 @@ impl NetDevice {
             desc.cso = 0;
             desc.css = 0;
             desc.special = 0;
-            desc.sta = 0;
+            desc.sta = E1000_TXD_STAT_DD as u8;  // Mark all the descriptors as Done, so the first packet can be transmitted.
         });
-        Ok(TxRingBuf{
-            desc:dma_desc,
-            buf:dma_buf,
-        })
+        Ok(TxRingBuf::new(dma_desc, dma_buf, TX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE))
     }
 
     fn e1000_setup_all_rx_resources(data: &NetDevicePrvData) -> Result<RxRingBuf> {
@@ -94,10 +95,7 @@ impl NetDevice {
         });
 
 
-        Ok(RxRingBuf{
-            desc:dma_desc,
-            buf:dma_buf,
-        })
+        Ok(RxRingBuf::new(dma_desc, dma_buf, RX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE))
     }
 
 
@@ -120,7 +118,17 @@ impl net::DeviceOperations for NetDevice {
         // TODO e1000_power_up_phy() not implemented. It's used in case of PHY *MAY* power down,
         // which will not be supported in this MVP driver.
         
+
+        // modify e1000's hardware registers, give rx/tx queue info to the nic.
         data.e1000_hw_ops.e1000_configure(&rx_ringbuf, &tx_ringbuf)?;
+
+        *data.rx_ring.lock_irqdisable() = Some(rx_ringbuf);
+        *data.tx_ring.lock_irqdisable() = Some(tx_ringbuf);
+
+        let irq_prv_data = Box::try_new(IrqPrivateData{
+
+        })?;
+        let req_reg = kernel::irq::Registration::<E1000InterruptHandler>::try_new(data.irq, irq_prv_data, kernel::irq::flags::SHARED, fmt!("{}",data.dev.name()))?;
 
         data.napi.enable();
 
@@ -136,8 +144,52 @@ impl net::DeviceOperations for NetDevice {
         Ok(())
     }
 
-    fn start_xmit(_skb: &net::SkBuff, _dev: &net::Device, _data: &NetDevicePrvData) -> net::NetdevTx {
-        pr_info!("Rust for linux e1000 driver demo (net device start_xmit)\n");
+    fn start_xmit(skb: &net::SkBuff, dev: &net::Device, data: &NetDevicePrvData) -> net::NetdevTx {
+
+        if skb.head_data().len() > RXTX_SINGLE_RING_BLOCK_SIZE {
+            pr_err!("xmit msg too long");
+            return net::NetdevTx::Busy
+        }
+
+        let tx_ring = data.tx_ring.lock_irqdisable();
+        let mut tdt = data.e1000_hw_ops.e1000_read_tx_queue_tail();
+        let mut tdh = data.e1000_hw_ops.e1000_read_tx_queue_head();
+
+        pr_info!("Rust for linux e1000 driver demo (net device start_xmit) tdt={}, tdh={}\n", tdt, tdh);
+
+        /* On PCI/PCI-X HW, if packet size is less than ETH_ZLEN,
+        * packets may get corrupted during padding by HW.
+        * To WA this issue, pad all small packets manually.
+        */
+        skb.put_padto(bindings::ETH_ZLEN);
+        
+        let tx_ring = tx_ring.as_ref().unwrap();
+        let tx_descs:&mut [TxDescEntry] = tx_ring.as_desc_slice();
+        let tx_desc = &mut tx_descs[tdt as usize];
+        if tx_desc.sta & E1000_TXD_STAT_DD as u8 == 0 {
+            pr_err!("xmit busy");
+            return net::NetdevTx::Busy
+        }
+
+        let tx_buf: &mut [u8] = tx_ring.as_buf_slice(tdt as usize);
+        let src = skb.head_data();
+        tx_buf[..src.len()].copy_from_slice(src);
+        tx_desc.length = src.len() as u16;
+        tx_desc.cmd = ((E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP) >> 24) as u8;
+        tx_desc.sta = 0;
+
+        // TODO memory fence here. we are testing it on an x86, so maybe left it out is ok.
+
+        tdt = (tdt + 1) % TX_RING_SIZE as u32;
+        data.e1000_hw_ops.e1000_write_tx_queue_tail(tdt);
+
+        
+        
+        skb.napi_consume(0);
+
+        
+
+        
         net::NetdevTx::Ok
     }
 
@@ -155,6 +207,22 @@ impl net::DeviceOperations for NetDevice {
         stats.set_tx_packets(0);
     }
 }
+
+// since the ownership limitation, We can't use NetDevicePrvData as C code, so we need to define a new type here. 
+struct IrqPrivateData {}
+
+struct E1000InterruptHandler {}
+
+impl kernel::irq::Handler for E1000InterruptHandler {
+    type Data = Box<IrqPrivateData>;
+
+    fn handle_irq(data: &IrqPrivateData) -> kernel::irq::Return {
+        pr_info!("Rust for linux e1000 driver demo (handle_irq)\n");
+        kernel::irq::Return::Handled
+    }
+}
+
+
 
 /// the private data for the adapter
 struct E1000DrvPrvData {
@@ -266,11 +334,22 @@ impl pci::Driver for E1000Drv {
 
         netdev.netif_carrier_off();
 
+
+        // SAFETY: `spinlock_init` is called below.
+        let mut tx_ring = unsafe{SpinLock::new(None)};
+        let mut rx_ring = unsafe{SpinLock::new(None)};
+        // SAFETY: We don't move `tx_ring` and `rx_ring`.
+        kernel::spinlock_init!(unsafe{Pin::new_unchecked(&mut tx_ring)}, "tx_ring");
+        kernel::spinlock_init!(unsafe{Pin::new_unchecked(&mut rx_ring)}, "rx_ring");
+
+
         netdev_reg.register(Box::try_new(
             NetDevicePrvData {
                 dev: Arc::try_new(common_dev)?,
                 e1000_hw_ops,
                 napi: napi.into(),
+                tx_ring,
+                rx_ring,
                 irq,
             }
         )?)?;

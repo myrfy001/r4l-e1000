@@ -28,6 +28,22 @@ pub(crate) struct RxDescEntry {
 pub(crate) struct RingBuf<T> {
     pub(crate) desc: dma::Allocation::<T>,
     pub(crate) buf: dma::Allocation::<u8>,
+    len: usize,
+    block_size: usize,
+}
+
+impl<T> RingBuf<T> {
+    pub(crate) fn as_desc_slice(&self) -> &mut [T] {
+        unsafe{core::slice::from_raw_parts_mut(self.desc.cpu_addr, self.len)}
+    }
+
+    pub(crate) fn as_buf_slice(&self, idx: usize) -> &mut [u8] {
+        unsafe{core::slice::from_raw_parts_mut(self.buf.cpu_addr.offset((self.block_size * idx) as isize), self.block_size)}
+    }
+
+    pub(crate) fn new(desc: dma::Allocation::<T>, buf: dma::Allocation::<u8>, len: usize, block_size: usize) -> Self {
+        Self {desc, buf, len, block_size}
+    }
 }
 
 pub(crate) type RxRingBuf = RingBuf<RxDescEntry>;

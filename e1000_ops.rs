@@ -88,7 +88,7 @@ impl E1000Ops {
         // set ring buf head index, tail index and buf size
         self.mem_addr.writel(0, E1000_TDH)?;
         self.mem_addr.writel(0, E1000_TDT)?;
-        self.mem_addr.writel((TX_RING_SIZE * 8) as u32, E1000_TDLEN)?;
+        self.mem_addr.writel((TX_RING_SIZE * 16) as u32, E1000_TDLEN)?;
         // set ring buf start address
         self.mem_addr.writel(tx_ring.desc.dma_handle as u32, E1000_TDBAL)?;
         self.mem_addr.writel(0, E1000_TDBAH)?;
@@ -131,7 +131,7 @@ impl E1000Ops {
         
         self.mem_addr.writel(0, E1000_RDH)?;
         self.mem_addr.writel(0, E1000_RDT)?;
-        self.mem_addr.writel((RX_RING_SIZE * 8) as u32, E1000_RDLEN)?;
+        self.mem_addr.writel((RX_RING_SIZE * 16) as u32, E1000_RDLEN)?;
         self.mem_addr.writel(rx_ring.desc.dma_handle as u32, E1000_RDBAL)?;
         self.mem_addr.writel(0, E1000_RDBAH)?;
 
@@ -146,6 +146,19 @@ impl E1000Ops {
         
         Ok(())
     }
+
+    pub(crate) fn e1000_read_tx_queue_head(&self) -> u32 {
+        self.mem_addr.readl(E1000_TDH).unwrap()
+    }
+
+    pub(crate) fn e1000_read_tx_queue_tail(&self) -> u32 {
+        self.mem_addr.readl(E1000_TDT).unwrap()
+    }
+
+    pub(crate) fn e1000_write_tx_queue_tail(&self, val: u32) {
+        self.mem_addr.writel(val, E1000_TDT).unwrap()
+    }
+
 
 
 }
