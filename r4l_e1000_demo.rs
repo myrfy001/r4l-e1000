@@ -175,6 +175,8 @@ impl net::DeviceOperations for NetDevice {
         */
         skb.put_padto(bindings::ETH_ZLEN);
         
+        dev.sent_queue(skb.len());
+
         let tx_ring = tx_ring.as_ref().unwrap();
         let tx_descs:&mut [TxDescEntry] = tx_ring.as_desc_slice();
         let tx_desc = &mut tx_descs[tdt as usize];
@@ -195,11 +197,12 @@ impl net::DeviceOperations for NetDevice {
         tdt = (tdt + 1) % TX_RING_SIZE as u32;
         data.e1000_hw_ops.e1000_write_tx_queue_tail(tdt);
 
-        dev.sent_queue(skb.len());
+        
+        // This line sometimes will cause skb.len() to a very huge number and make the following
+        // dev.completed_queue() fail. So, comment it for now.
+        // TODO: figure out why skb.len() will change in skb.napi_consume()
+        // skb.napi_consume(64);
 
-        
-        
-        skb.napi_consume(64);
         dev.completed_queue(1, skb.len());
         
         net::NetdevTx::Ok
@@ -274,22 +277,18 @@ impl net::NapiPoller for NAPI {
         rdt = (rdt + 1) % RX_RING_SIZE;
 
 
-        pr_info!("1-----------(napi poll)\n");
 
         let rx_ring_guard = data.rx_ring.lock();
         let rx_ring =  rx_ring_guard.as_ref().unwrap();
 
-        pr_info!("2-----------(napi poll)\n");
         
         let mut descs = rx_ring.as_desc_slice();
 
         while descs[rdt].status & E1000_RXD_STAT_DD as u8 != 0 {
-            pr_info!("3-----------(napi poll)\n");
             let packet_len = descs[rdt].length as usize;
             let skb = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
             let dst = unsafe{core::slice::from_raw_parts_mut(skb.head_data().as_ptr() as *mut u8, packet_len)};
             dst.copy_from_slice(&rx_ring.as_buf_slice(rdt)[..packet_len]);
-            pr_info!("4-----------(napi poll)\n");
 
             skb.put(packet_len as u32);
             let protocol = skb.eth_type_trans(dev);
@@ -299,12 +298,8 @@ impl net::NapiPoller for NAPI {
             descs[rdt].status = 0;
             data.e1000_hw_ops.e1000_write_rx_queue_tail(rdt as u32);
             rdt = (rdt + 1) % RX_RING_SIZE;
-            pr_info!("5-----------(napi poll)\n");
         }
-
-        pr_info!("6-----------(napi poll)\n");
         data.napi.complete_done(1);
-        pr_info!("exit----------------");
         1
     }
 }
@@ -446,12 +441,5 @@ impl kernel::Module for E1000KernelMod {
 impl Drop for E1000KernelMod {
     fn drop(&mut self) {
         pr_info!("Rust for linux e1000 driver demo (exit)\n");
-    }
-}
-
-/// pr
-pub fn print_hex_dump(b:&[u8], l: usize) {
-    for x in &b[..l] {
-        pr_info!("{:x} ", x);
     }
 }
