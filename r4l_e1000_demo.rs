@@ -38,7 +38,7 @@ module! {
 struct NetDevicePrvData {
     dev: Arc<device::Device>,
     napi: Arc<net::Napi>,
-    e1000_hw_ops: E1000Ops,
+    e1000_hw_ops: Arc<E1000Ops>,
     tx_ring: SpinLock<Option<TxRingBuf>>,
     rx_ring: SpinLock<Option<RxRingBuf>>,
     irq: u32,
@@ -129,7 +129,8 @@ impl net::DeviceOperations for NetDevice {
         *data.tx_ring.lock_irqdisable() = Some(tx_ringbuf);
 
         let irq_prv_data = Box::try_new(IrqPrivateData{
-
+            e1000_hw_ops: Arc::clone(&data.e1000_hw_ops),
+            napi: Arc::clone(&data.napi),
         })?;
         
         // Again, the `irq::Registration` contains an `irq::InternalRegistration` which implemented `Drop`, so 
@@ -220,7 +221,10 @@ impl net::DeviceOperations for NetDevice {
 }
 
 // since the ownership limitation, We can't use NetDevicePrvData as C code, so we need to define a new type here. 
-struct IrqPrivateData {}
+struct IrqPrivateData {
+    e1000_hw_ops: Arc<E1000Ops>,
+    napi: Arc<net::Napi>,
+}
 
 struct E1000InterruptHandler {}
 
@@ -229,6 +233,13 @@ impl kernel::irq::Handler for E1000InterruptHandler {
 
     fn handle_irq(data: &IrqPrivateData) -> kernel::irq::Return {
         pr_info!("Rust for linux e1000 driver demo (handle_irq)\n");
+
+        let pending_irqs = data.e1000_hw_ops.e1000_read_interrupt_state();
+
+        pr_info!("pending_irqs: {}\n", pending_irqs);
+
+        data.napi.schedule();
+
         kernel::irq::Return::Handled
     }
 }
@@ -254,11 +265,47 @@ impl net::NapiPoller for NAPI {
     fn poll(
         _napi: &net::Napi,
         _budget: i32,
-        _dev: &net::Device,
-        _data: &NetDevicePrvData,
+        dev: &net::Device,
+        data: &NetDevicePrvData,
     ) -> i32 {
         pr_info!("Rust for linux e1000 driver demo (napi poll)\n");
-        todo!()
+
+        let mut rdt = data.e1000_hw_ops.e1000_read_rx_queue_tail() as usize;
+        rdt = (rdt + 1) % RX_RING_SIZE;
+
+
+        pr_info!("1-----------(napi poll)\n");
+
+        let rx_ring_guard = data.rx_ring.lock();
+        let rx_ring =  rx_ring_guard.as_ref().unwrap();
+
+        pr_info!("2-----------(napi poll)\n");
+        
+        let mut descs = rx_ring.as_desc_slice();
+
+        while descs[rdt].status & E1000_RXD_STAT_DD as u8 != 0 {
+            pr_info!("3-----------(napi poll)\n");
+            let packet_len = descs[rdt].length as usize;
+            let skb = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
+            let dst = unsafe{core::slice::from_raw_parts_mut(skb.head_data().as_ptr() as *mut u8, packet_len)};
+            dst.copy_from_slice(&rx_ring.as_buf_slice(rdt)[..packet_len]);
+            pr_info!("4-----------(napi poll)\n");
+
+            skb.put(packet_len as u32);
+            let protocol = skb.eth_type_trans(dev);
+            skb.protocol_set(protocol);
+            
+            data.napi.gro_receive(&skb);
+            descs[rdt].status = 0;
+            data.e1000_hw_ops.e1000_write_rx_queue_tail(rdt as u32);
+            rdt = (rdt + 1) % RX_RING_SIZE;
+            pr_info!("5-----------(napi poll)\n");
+        }
+
+        pr_info!("6-----------(napi poll)\n");
+        data.napi.complete_done(1);
+        pr_info!("exit----------------");
+        1
     }
 }
 
@@ -357,7 +404,7 @@ impl pci::Driver for E1000Drv {
         netdev_reg.register(Box::try_new(
             NetDevicePrvData {
                 dev: Arc::try_new(common_dev)?,
-                e1000_hw_ops,
+                e1000_hw_ops: Arc::try_new(e1000_hw_ops)?,
                 napi: napi.into(),
                 tx_ring,
                 rx_ring,

@@ -98,6 +98,14 @@ pub(crate) const E1000_TXD_CMD_RS:u32 = 0x08000000;	    /* Report Status */
 pub(crate) const E1000_TXD_CMD_EOP:u32 = 0x01000000;	/* End of Packet */
 
 
+/* Receive Descriptor bit definitions */
+pub(crate) const E1000_RXD_STAT_DD:u32 = 0x01;	/* Descriptor Done */
+// pub(crate) const E1000_:u32 = ;	/*  */
+// pub(crate) const E1000_:u32 = ;	/*  */
+// pub(crate) const E1000_:u32 = ;	/*  */
+// pub(crate) const E1000_:u32 = ;	/*  */
+// pub(crate) const E1000_:u32 = ;	/*  */
+
 /* Interrupt Cause Read Bits*/
 pub(crate) const E1000_ICR_RXT0:u32 = 0x00000080;	/* rx timer intr (ring 0) */
 // pub(crate) const E1000_:u32 = ;	/*  */
