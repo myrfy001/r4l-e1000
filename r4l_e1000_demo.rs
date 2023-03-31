@@ -38,7 +38,7 @@ module! {
 }
 
 
-
+/// The private data for this driver
 struct NetDevicePrvData {
     dev: Arc<device::Device>,
     napi: Arc<net::Napi>,
@@ -54,10 +54,13 @@ struct NetDevicePrvData {
 unsafe impl Send for NetDevicePrvData {}
 unsafe impl Sync for NetDevicePrvData {}
 
+/// Represent the network device
 struct NetDevice {}
 
 
 impl NetDevice {
+
+    /// Alloc the tx descriptor. But doesn't need to alloc buffer memory, since the network stack will pass in a SkBuff.
     fn e1000_setup_all_tx_resources(data: &NetDevicePrvData) -> Result<TxRingBuf> {
 
         // Alloc dma memory space for tx desciptors
@@ -79,6 +82,9 @@ impl NetDevice {
         Ok(TxRingBuf::new(dma_desc, TX_RING_SIZE))
     }
 
+
+    /// Alloc the rx descriptor and the corresponding memory space. use `alloc_skb_ip_align` to alloc buffer and then map it to
+    /// DMA address.
     fn e1000_setup_all_rx_resources(dev: &net::Device, data: &NetDevicePrvData) -> Result<RxRingBuf> {
 
         // Alloc dma memory space for rx desciptors
@@ -143,6 +149,7 @@ impl net::DeviceOperations for NetDevice {
     
     type Data = Box<NetDevicePrvData>;
 
+    /// this method will be called when you type `ip link set eth0 up` in your shell.
     fn open(dev: &net::Device, data: &NetDevicePrvData) -> Result {
         pr_info!("Rust for linux e1000 driver demo (net device open)\n");
 
@@ -187,6 +194,7 @@ impl net::DeviceOperations for NetDevice {
         Ok(())
     }
 
+
     fn start_xmit(skb: &net::SkBuff, dev: &net::Device, data: &NetDevicePrvData) -> net::NetdevTx {
 
         if skb.head_data().len() > RXTX_SINGLE_RING_BLOCK_SIZE {
@@ -196,9 +204,9 @@ impl net::DeviceOperations for NetDevice {
 
         let mut tx_ring = data.tx_ring.lock_irqdisable();
         let mut tdt = data.e1000_hw_ops.e1000_read_tx_queue_tail();
-        let mut tdh = data.e1000_hw_ops.e1000_read_tx_queue_head();
-        let mut rdt = data.e1000_hw_ops.e1000_read_rx_queue_tail();
-        let mut rdh = data.e1000_hw_ops.e1000_read_rx_queue_head();
+        let tdh = data.e1000_hw_ops.e1000_read_tx_queue_head();
+        let rdt = data.e1000_hw_ops.e1000_read_rx_queue_tail();
+        let rdh = data.e1000_hw_ops.e1000_read_rx_queue_head();
 
         pr_info!("Rust for linux e1000 driver demo (net device start_xmit) tdt={}, tdh={}, rdt={}, rdh={}\n", tdt, tdh, rdt, rdh);
 
@@ -241,14 +249,11 @@ impl net::DeviceOperations for NetDevice {
         net::NetdevTx::Ok
     }
 
+
+
     fn get_stats64(_netdev: &net::Device, _data: &NetDevicePrvData, stats: &mut net::RtnlLinkStats64) {
         pr_info!("Rust for linux e1000 driver demo (net device get_stats64)\n");
-        
-        // stats.set_rx_bytes(data.stats.rx_bytes.load(Ordering::Relaxed));
-        // stats.set_rx_packets(data.stats.rx_packets.load(Ordering::Relaxed));
-        // stats.set_tx_bytes(data.stats.tx_bytes.load(Ordering::Relaxed));
-        // stats.set_tx_packets(data.stats.tx_packets.load(Ordering::Relaxed));
-
+        // TODO not implemented.
         stats.set_rx_bytes(0);
         stats.set_rx_packets(0);
         stats.set_tx_bytes(0);
