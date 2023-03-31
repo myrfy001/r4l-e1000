@@ -8,6 +8,7 @@ use crate::hw_defs::{RxDescEntry,TxDescEntry};
 pub(crate) struct RingBuf<T> {
     pub(crate) desc: dma::Allocation::<T>,
     pub(crate) buf: RefCell<Vec<Option<(dma::MapSingle::<u8>,ARef<SkBuff>)>>>,
+    pub(crate) next_to_clean: usize,
     len: usize,
     block_size: usize,
 }
@@ -27,7 +28,7 @@ impl<T> RingBuf<T> {
                 buf_ref.try_push(None).unwrap();
             }
         }
-        Self {desc, buf, len, block_size}
+        Self {desc, buf, len, block_size, next_to_clean:0}
     }
 }
 

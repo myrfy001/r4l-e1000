@@ -108,5 +108,8 @@ pub(crate) const E1000_RXD_STAT_DD:u32 = 0x01;	/* Descriptor Done */
 
 /* Interrupt Cause Read Bits*/
 pub(crate) const E1000_ICR_RXT0:u32 = 0x00000080;	/* rx timer intr (ring 0) */
-// pub(crate) const E1000_:u32 = ;	/*  */
+pub(crate) const E1000_ICR_TXDW:u32 = 0x00000001;	/* Transmit desc written back */
+pub(crate) const E1000_ICR_RXDMT0:u32 = 0x00000010;	/* rx desc min. threshold (0) */
+pub(crate) const E1000_ICR_RXSEQ:u32 = 0x00000008;	/* rx sequence error */
+pub(crate) const E1000_ICR_LSC:u32 = 0x00000004;	/* Link Status Change */
 // pub(crate) const E1000_:u32 = ;	/*  */

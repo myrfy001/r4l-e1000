@@ -79,7 +79,10 @@ impl E1000Ops {
         self.e1000_configure_tx(tx_ring)?;
 
         // Enable related interrupts
-        self.mem_addr.writel(0x9C, E1000_IMS)?;
+        self.mem_addr.writel(
+            E1000_ICR_TXDW | E1000_ICR_RXT0 | E1000_ICR_RXDMT0 | E1000_ICR_RXSEQ | E1000_ICR_LSC,
+            E1000_IMS
+        )?;
         Ok(())
     }
 

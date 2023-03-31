@@ -110,6 +110,32 @@ impl NetDevice {
     }
 
 
+    // corresponding to the C version e1000_clean_tx_irq()
+    fn e1000_recycle_tx_queue(dev: &net::Device, data: &NetDevicePrvData) {
+        let tdt = data.e1000_hw_ops.e1000_read_tx_queue_tail();
+        let tdh = data.e1000_hw_ops.e1000_read_tx_queue_head();
+
+        let mut tx_ring = data.tx_ring.lock_irqdisable();
+        let mut tx_ring = tx_ring.as_mut().unwrap();
+
+        let descs = tx_ring.as_desc_slice();
+        
+        let mut idx = tx_ring.next_to_clean;
+        while descs[idx].sta & E1000_TXD_STAT_DD as u8 != 0 && idx != tdh as usize {
+            let (dm, skb) = tx_ring.buf.borrow_mut()[idx].take().unwrap();
+
+            dev.completed_queue(1, skb.len());
+            skb.napi_consume(64);
+            drop(dm);
+            drop(skb);
+
+            idx = (idx + 1) % TX_RING_SIZE;
+        }
+        tx_ring.next_to_clean = idx;
+
+    }
+
+
 }
 
 #[vtable]
@@ -214,13 +240,6 @@ impl net::DeviceOperations for NetDevice {
         data.e1000_hw_ops.e1000_write_tx_queue_tail(tdt);
 
         
-        // This line sometimes will cause skb.len() to a very huge number and make the following
-        // dev.completed_queue() fail. So, comment it for now.
-        // TODO: figure out why skb.len() will change in skb.napi_consume()
-        // skb.napi_consume(64);
-
-        dev.completed_queue(1, skb.len());
-        
         net::NetdevTx::Ok
     }
 
@@ -257,12 +276,15 @@ impl kernel::irq::Handler for E1000InterruptHandler {
 
         pr_info!("pending_irqs: {}\n", pending_irqs);
 
+        if pending_irqs == 0 {
+            return kernel::irq::Return::None
+        }
+
         data.napi.schedule();
 
         kernel::irq::Return::Handled
     }
 }
-
 
 
 /// the private data for the adapter
@@ -320,6 +342,9 @@ impl net::NapiPoller for NAPI {
             data.e1000_hw_ops.e1000_write_rx_queue_tail(rdt as u32);
             rdt = (rdt + 1) % RX_RING_SIZE;
         }
+
+        NetDevice::e1000_recycle_tx_queue(dev, data);
+
         data.napi.complete_done(1);
         1
     }
