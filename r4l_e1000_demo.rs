@@ -15,10 +15,13 @@ use kernel::device::RawDevice;
 use kernel::sync::SpinLock;
 
 
-use hw_defs::{RxRingBuf, TxRingBuf, TxDescEntry, RxDescEntry};
 mod consts;
 mod hw_defs;
+mod ring_buf;
 mod e1000_ops;
+
+use hw_defs::{TxDescEntry, RxDescEntry};
+use ring_buf::{RxRingBuf, TxRingBuf};
 
 use e1000_ops::E1000Ops;
 
@@ -62,11 +65,9 @@ impl NetDevice {
         // Safety: all fields of the slice members will be inited below.
         let tx_ring = unsafe{core::slice::from_raw_parts_mut(dma_desc.cpu_addr, TX_RING_SIZE)};
         
-        // Alloc dma memory space for buffers
-        let dma_buf = dma::Allocation::<u8>::try_new(&*data.dev, TX_RING_SIZE * RXTX_SINGLE_RING_BLOCK_SIZE, bindings::GFP_KERNEL)?;
         
         tx_ring.iter_mut().enumerate().for_each(|(idx, desc)| {
-            desc.buf_addr = (dma_buf.dma_handle as usize + RXTX_SINGLE_RING_BLOCK_SIZE * idx) as u64;
+            desc.buf_addr = 0;
             desc.cmd = 0;
             desc.length = 0;
             desc.cso = 0;
@@ -74,31 +75,38 @@ impl NetDevice {
             desc.special = 0;
             desc.sta = E1000_TXD_STAT_DD as u8;  // Mark all the descriptors as Done, so the first packet can be transmitted.
         });
-        Ok(TxRingBuf::new(dma_desc, dma_buf, TX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE))
+        Ok(TxRingBuf::new(dma_desc, TX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE))
     }
 
-    fn e1000_setup_all_rx_resources(data: &NetDevicePrvData) -> Result<RxRingBuf> {
+    fn e1000_setup_all_rx_resources(dev: &net::Device, data: &NetDevicePrvData) -> Result<RxRingBuf> {
 
         // Alloc dma memory space for rx desciptors
         let dma_desc = dma::Allocation::<hw_defs::RxDescEntry>::try_new(&*data.dev, RX_RING_SIZE, bindings::GFP_KERNEL)?;
         
         // Safety: all fields of the slice members will be inited below.
-        let rx_ring = unsafe{core::slice::from_raw_parts_mut(dma_desc.cpu_addr, RX_RING_SIZE)};
-        
+        let rx_ring_desc = unsafe{core::slice::from_raw_parts_mut(dma_desc.cpu_addr, RX_RING_SIZE)};
+                
         // Alloc dma memory space for buffers
         let dma_buf = dma::Allocation::<u8>::try_new(&*data.dev, RX_RING_SIZE * RXTX_SINGLE_RING_BLOCK_SIZE, bindings::GFP_KERNEL)?;
         
-        rx_ring.iter_mut().enumerate().for_each(|(idx, desc)| {
-            desc.buf_addr = (dma_buf.dma_handle as usize + RXTX_SINGLE_RING_BLOCK_SIZE * idx) as u64;
+        let mut rx_ring = RxRingBuf::new(dma_desc, RX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE);
+
+        
+        rx_ring_desc.iter_mut().enumerate().for_each(|(idx, desc)| {
+            let skb = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
+            let dma_map = dma::MapSingle::try_new(&*data.dev, skb.head_data().as_ptr() as *mut u8, RXTX_SINGLE_RING_BLOCK_SIZE, bindings::dma_data_direction_DMA_FROM_DEVICE).unwrap();
+            
+            desc.buf_addr = dma_map.dma_handle as u64;
             desc.length = 0;
             desc.special = 0;
             desc.checksum = 0;
             desc.status = 0;
             desc.errors = 0;
+
+            rx_ring.buf.borrow_mut()[idx] = Some((dma_map, skb));
         });
 
-
-        Ok(RxRingBuf::new(dma_desc, dma_buf, RX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE))
+        Ok(rx_ring)
     }
 
 
@@ -116,7 +124,7 @@ impl net::DeviceOperations for NetDevice {
 
         // init dma memory for tx and rx
         let tx_ringbuf = Self::e1000_setup_all_tx_resources(data)?;
-        let rx_ringbuf = Self::e1000_setup_all_rx_resources(data)?;
+        let rx_ringbuf = Self::e1000_setup_all_rx_resources(dev, data)?;
 
         // TODO e1000_power_up_phy() not implemented. It's used in case of PHY *MAY* power down,
         // which will not be supported in this MVP driver.
@@ -160,7 +168,7 @@ impl net::DeviceOperations for NetDevice {
             return net::NetdevTx::Busy
         }
 
-        let tx_ring = data.tx_ring.lock_irqdisable();
+        let mut tx_ring = data.tx_ring.lock_irqdisable();
         let mut tdt = data.e1000_hw_ops.e1000_read_tx_queue_tail();
         let mut tdh = data.e1000_hw_ops.e1000_read_tx_queue_head();
         let mut rdt = data.e1000_hw_ops.e1000_read_rx_queue_tail();
@@ -175,22 +183,30 @@ impl net::DeviceOperations for NetDevice {
         */
         skb.put_padto(bindings::ETH_ZLEN);
         
+        // tell the kernel that we have pended some data to the hardware.
         dev.sent_queue(skb.len());
 
-        let tx_ring = tx_ring.as_ref().unwrap();
+        let mut tx_ring = tx_ring.as_mut().unwrap();
         let tx_descs:&mut [TxDescEntry] = tx_ring.as_desc_slice();
         let tx_desc = &mut tx_descs[tdt as usize];
         if tx_desc.sta & E1000_TXD_STAT_DD as u8 == 0 {
             pr_err!("xmit busy");
-            return net::NetdevTx::Busy
+            return net::NetdevTx::Busy;
         }
 
-        let tx_buf: &mut [u8] = tx_ring.as_buf_slice(tdt as usize);
-        let src = skb.head_data();
-        tx_buf[..src.len()].copy_from_slice(src);
-        tx_desc.length = src.len() as u16;
+        // alloc DMA map to skb
+        let ms:dma::MapSingle<u8> = if let Ok(ms) = dma::MapSingle::try_new(&*data.dev, skb.head_data().as_ptr() as *mut u8, skb.len() as usize, bindings::dma_data_direction_DMA_TO_DEVICE) {
+            ms
+        } else {
+            return net::NetdevTx::Busy;
+        };
+
+        tx_desc.buf_addr = ms.dma_handle as u64;
+        tx_desc.length = skb.len() as u16;
         tx_desc.cmd = ((E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP) >> 24) as u8;
         tx_desc.sta = 0;
+
+        tx_ring.buf.borrow_mut()[tdt as usize].replace((ms, skb.into()));
 
         // TODO memory fence here. we are testing it on an x86, so maybe left it out is ok.
 
@@ -278,7 +294,7 @@ impl net::NapiPoller for NAPI {
 
 
 
-        let rx_ring_guard = data.rx_ring.lock();
+        let mut rx_ring_guard = data.rx_ring.lock();
         let rx_ring =  rx_ring_guard.as_ref().unwrap();
 
         
@@ -286,15 +302,20 @@ impl net::NapiPoller for NAPI {
 
         while descs[rdt].status & E1000_RXD_STAT_DD as u8 != 0 {
             let packet_len = descs[rdt].length as usize;
-            let skb = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
-            let dst = unsafe{core::slice::from_raw_parts_mut(skb.head_data().as_ptr() as *mut u8, packet_len)};
-            dst.copy_from_slice(&rx_ring.as_buf_slice(rdt)[..packet_len]);
+            let buf = &mut rx_ring.buf.borrow_mut();
+            let skb = &buf[rdt].as_mut().unwrap().1;
 
             skb.put(packet_len as u32);
             let protocol = skb.eth_type_trans(dev);
             skb.protocol_set(protocol);
             
             data.napi.gro_receive(&skb);
+
+            let skb = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
+            let dma_map = dma::MapSingle::try_new(&*data.dev, skb.head_data().as_ptr() as *mut u8, RXTX_SINGLE_RING_BLOCK_SIZE, bindings::dma_data_direction_DMA_FROM_DEVICE).unwrap();
+
+            buf[rdt] = Some((dma_map, skb));
+
             descs[rdt].status = 0;
             data.e1000_hw_ops.e1000_write_rx_queue_tail(rdt as u32);
             rdt = (rdt + 1) % RX_RING_SIZE;

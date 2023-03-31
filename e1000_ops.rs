@@ -5,7 +5,7 @@ use kernel::sync::Arc;
 
 use core::time::Duration;
 
-use crate::hw_defs::{RxRingBuf, TxRingBuf};
+use crate::ring_buf::{RxRingBuf, TxRingBuf};
 
 use crate::consts::*;
 
