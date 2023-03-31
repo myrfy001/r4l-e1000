@@ -96,7 +96,7 @@ impl E1000Ops {
         self.mem_addr.writel(0, E1000_TDT)?;
         self.mem_addr.writel((TX_RING_SIZE * 16) as u32, E1000_TDLEN)?;
         // set ring buf start address
-        self.mem_addr.writel(tx_ring.desc.dma_handle as u32, E1000_TDBAL)?;
+        self.mem_addr.writel(tx_ring.desc.get_dma_addr() as u32, E1000_TDBAL)?;
         self.mem_addr.writel(0, E1000_TDBAH)?;
 
         let tctl = (
@@ -139,8 +139,8 @@ impl E1000Ops {
         self.mem_addr.writel(0, E1000_RDH)?;
         self.mem_addr.writel((RX_RING_SIZE - 1) as u32, E1000_RDT)?;
         self.mem_addr.writel((RX_RING_SIZE * 16) as u32, E1000_RDLEN)?;
-        self.mem_addr.writel(rx_ring.desc.dma_handle as u32, E1000_RDBAL)?;
-        // self.mem_addr.writel(0, E1000_RDBAH)?;
+        self.mem_addr.writel(rx_ring.desc.get_dma_addr() as u32, E1000_RDBAL)?;
+        self.mem_addr.writel(0, E1000_RDBAH)?;
 
         let rctl = (
             E1000_RCTL_EN | 

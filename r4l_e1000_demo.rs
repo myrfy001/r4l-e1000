@@ -15,6 +15,7 @@ use kernel::device::RawDevice;
 use kernel::sync::SpinLock;
 
 
+
 mod consts;
 mod hw_defs;
 mod ring_buf;
@@ -75,7 +76,7 @@ impl NetDevice {
             desc.special = 0;
             desc.sta = E1000_TXD_STAT_DD as u8;  // Mark all the descriptors as Done, so the first packet can be transmitted.
         });
-        Ok(TxRingBuf::new(dma_desc, TX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE))
+        Ok(TxRingBuf::new(dma_desc, TX_RING_SIZE))
     }
 
     fn e1000_setup_all_rx_resources(dev: &net::Device, data: &NetDevicePrvData) -> Result<RxRingBuf> {
@@ -89,7 +90,7 @@ impl NetDevice {
         // Alloc dma memory space for buffers
         let dma_buf = dma::Allocation::<u8>::try_new(&*data.dev, RX_RING_SIZE * RXTX_SINGLE_RING_BLOCK_SIZE, bindings::GFP_KERNEL)?;
         
-        let mut rx_ring = RxRingBuf::new(dma_desc, RX_RING_SIZE, RXTX_SINGLE_RING_BLOCK_SIZE);
+        let mut rx_ring = RxRingBuf::new(dma_desc, RX_RING_SIZE);
 
         
         rx_ring_desc.iter_mut().enumerate().for_each(|(idx, desc)| {
@@ -118,7 +119,7 @@ impl NetDevice {
         let mut tx_ring = data.tx_ring.lock_irqdisable();
         let mut tx_ring = tx_ring.as_mut().unwrap();
 
-        let descs = tx_ring.as_desc_slice();
+        let descs = tx_ring.desc.as_desc_slice();
         
         let mut idx = tx_ring.next_to_clean;
         while descs[idx].sta & E1000_TXD_STAT_DD as u8 != 0 && idx != tdh as usize {
@@ -211,7 +212,7 @@ impl net::DeviceOperations for NetDevice {
         dev.sent_queue(skb.len());
 
         let mut tx_ring = tx_ring.as_mut().unwrap();
-        let tx_descs:&mut [TxDescEntry] = tx_ring.as_desc_slice();
+        let tx_descs:&mut [TxDescEntry] = tx_ring.desc.as_desc_slice();
         let tx_desc = &mut tx_descs[tdt as usize];
         if tx_desc.sta & E1000_TXD_STAT_DD as u8 == 0 {
             pr_err!("xmit busy");
@@ -295,9 +296,9 @@ impl driver::DeviceRemoval for E1000DrvPrvData {
     }
 }
 
-struct NAPI{}
+struct NapiHandler{}
 
-impl net::NapiPoller for NAPI {
+impl net::NapiPoller for NapiHandler {
     type Data = Box<NetDevicePrvData>;
 
     fn poll(
@@ -314,10 +315,10 @@ impl net::NapiPoller for NAPI {
 
 
         let mut rx_ring_guard = data.rx_ring.lock();
-        let rx_ring =  rx_ring_guard.as_ref().unwrap();
+        let rx_ring =  rx_ring_guard.as_mut().unwrap();
 
         
-        let mut descs = rx_ring.as_desc_slice();
+        let mut descs = rx_ring.desc.as_desc_slice();
 
         while descs[rdt].status & E1000_RXD_STAT_DD as u8 != 0 {
             let packet_len = descs[rdt].length as usize;
@@ -328,7 +329,7 @@ impl net::NapiPoller for NAPI {
             let protocol = skb.eth_type_trans(dev);
             skb.protocol_set(protocol);
 
-            data.napi.gro_receive(&skb);
+            data.napi.gro_receive(skb);
 
             let skb_new = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
             let dma_map = dma::MapSingle::try_new(&*data.dev, skb_new.head_data().as_ptr() as *mut u8, RXTX_SINGLE_RING_BLOCK_SIZE, bindings::dma_data_direction_DMA_FROM_DEVICE).unwrap();
@@ -380,7 +381,7 @@ impl pci::Driver for E1000Drv {
         dev.set_master();
 
         // get resource(memory range) provided by BAR0
-        let mem_res = dev.iter_resource().nth(0).ok_or(kernel::error::code::EIO)?;
+        let mem_res = dev.iter_resource().next().ok_or(kernel::error::code::EIO)?;
         let io_res = dev.iter_resource().skip(1).find(|r:&Resource|r.check_flags(bindings::IORESOURCE_IO)).ok_or(kernel::error::code::EIO)?;
 
         // TODO pci_save_state(pdev); not supported by crate now, only have raw C bindings.
@@ -405,7 +406,7 @@ impl pci::Driver for E1000Drv {
         // TODO ethtool support here.
 
         // Enable napi, the R4L will call `netif_napi_add_weight()`, the origin C version calls `netif_napi_add`
-        let napi = net::NapiAdapter::<NAPI>::add_weight(&netdev, 64)?;
+        let napi = net::NapiAdapter::<NapiHandler>::add_weight(&netdev, 64)?;
 
 
         // TODO implement C version `e1000_sw_init()`
@@ -462,7 +463,6 @@ impl pci::Driver for E1000Drv {
 
     fn remove(data: &Self::Data) {
         pr_info!("Rust for linux e1000 driver demo (remove)\n");
-        drop(data);
     }
 }
 struct E1000KernelMod {

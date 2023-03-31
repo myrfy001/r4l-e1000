@@ -1,6 +1,6 @@
 set -e
 
-make -C ../linux-e1000/ M=$PWD LLVM=1
+make -C ../linux-e1000/ M=$PWD LLVM=1 CLIPPY=1
 cp ./r4l_e1000_demo.ko ../rootfs
 
 pushd ../rootfs && \
