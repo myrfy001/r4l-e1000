@@ -123,7 +123,6 @@ impl NetDevice {
         let mut idx = tx_ring.next_to_clean;
         while descs[idx].sta & E1000_TXD_STAT_DD as u8 != 0 && idx != tdh as usize {
             let (dm, skb) = tx_ring.buf.borrow_mut()[idx].take().unwrap();
-
             dev.completed_queue(1, skb.len());
             skb.napi_consume(64);
             drop(dm);
@@ -201,7 +200,6 @@ impl net::DeviceOperations for NetDevice {
         let mut rdh = data.e1000_hw_ops.e1000_read_rx_queue_head();
 
         pr_info!("Rust for linux e1000 driver demo (net device start_xmit) tdt={}, tdh={}, rdt={}, rdh={}\n", tdt, tdh, rdt, rdh);
-        pr_info!("Interrupt State: {:x}", data.e1000_hw_ops.e1000_read_interrupt_state());
 
         /* On PCI/PCI-X HW, if packet size is less than ETH_ZLEN,
         * packets may get corrupted during padding by HW.
@@ -231,7 +229,6 @@ impl net::DeviceOperations for NetDevice {
         tx_desc.length = skb.len() as u16;
         tx_desc.cmd = ((E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP) >> 24) as u8;
         tx_desc.sta = 0;
-
         tx_ring.buf.borrow_mut()[tdt as usize].replace((ms, skb.into()));
 
         // TODO memory fence here. we are testing it on an x86, so maybe left it out is ok.
@@ -330,13 +327,13 @@ impl net::NapiPoller for NAPI {
             skb.put(packet_len as u32);
             let protocol = skb.eth_type_trans(dev);
             skb.protocol_set(protocol);
-            
+
             data.napi.gro_receive(&skb);
 
-            let skb = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
-            let dma_map = dma::MapSingle::try_new(&*data.dev, skb.head_data().as_ptr() as *mut u8, RXTX_SINGLE_RING_BLOCK_SIZE, bindings::dma_data_direction_DMA_FROM_DEVICE).unwrap();
-
-            buf[rdt] = Some((dma_map, skb));
+            let skb_new = dev.alloc_skb_ip_align(RXTX_SINGLE_RING_BLOCK_SIZE as u32).unwrap();
+            let dma_map = dma::MapSingle::try_new(&*data.dev, skb_new.head_data().as_ptr() as *mut u8, RXTX_SINGLE_RING_BLOCK_SIZE, bindings::dma_data_direction_DMA_FROM_DEVICE).unwrap();
+            descs[rdt].buf_addr = dma_map.dma_handle as u64;
+            buf[rdt] = Some((dma_map, skb_new));
 
             descs[rdt].status = 0;
             data.e1000_hw_ops.e1000_write_rx_queue_tail(rdt as u32);
@@ -344,7 +341,6 @@ impl net::NapiPoller for NAPI {
         }
 
         NetDevice::e1000_recycle_tx_queue(dev, data);
-
         data.napi.complete_done(1);
         1
     }
