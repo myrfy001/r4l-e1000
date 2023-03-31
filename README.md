@@ -1,35 +1,45 @@
-# Rust out-of-tree module
+## This is a project trying to port Intel E1000 driver to Rust For Linux in 7 days.
 
-This is a basic template for an out-of-tree Linux kernel module written in Rust.
+This project is built from scratch, starting from the R4L out of tree template(https://github.com/Rust-for-Linux/rust-out-of-tree-module), with some reference form:
 
-Please note that:
+* https://github.com/Rust-for-Linux/linux/blob/rust/drivers/net/ethernet/intel/e1000/e1000_main.c
+* https://github.com/elliott10/e1000-driver
+* https://github.com/fujita/rust-e1000
+* https://pdos.csail.mit.edu/6.828/2011/labs/lab6/
 
-  - The Rust support is experimental.
+Since this project is written from scratch, you can view the commit log for the develope process. And there is also a development log available. I will release it if possible.
 
-  - The kernel that the module is built against needs to be Rust-enabled (`CONFIG_RUST=y`).
+----
+
+
+The kernel that the module is built against needs to be Rust-enabled (`CONFIG_RUST=y`).
 
   - The kernel tree (`KDIR`) requires the Rust metadata to be available. These are generated during the kernel build, but may not be available for installed/distributed kernels (the scripts that install/distribute kernel headers etc. for the different package systems and Linux distributions are not updated to take into account Rust support yet).
 
   - All Rust symbols are `EXPORT_SYMBOL_GPL`.
 
-Example:
+Try running it with (you should read this shell script and modify some variables to match your environment):
 
 ```sh
-$ make KDIR=.../linux-with-rust-support LLVM=1
-make -C .../linux-with-rust-support M=$PWD
-make[1]: Entering directory '.../linux-with-rust-support'
-  RUSTC [M] .../rust-out-of-tree-module/rust_out_of_tree.o
-  MODPOST .../rust-out-of-tree-module/Module.symvers
-  CC [M]  .../rust-out-of-tree-module/rust_out_of_tree.mod.o
-  LD [M]  .../rust-out-of-tree-module/rust_out_of_tree.ko
-make[1]: Leaving directory '.../linux-with-rust-support'
+$ bash ./build_image.sh
 ```
 
-```txt
-[    1.076945] rust_out_of_tree: Rust out-of-tree sample (init)
-[    1.084944] rust_out_of_tree: My numbers are [72, 108, 200]
-[    1.085944] rust_out_of_tree: Rust out-of-tree sample (exit)
+When the kernel started, type the following command to install the driver and config the network interface:
+
+```sh
+insmod r4l_e1000_demo.ko
+ip link set eth0 up
+ip addr add broadcast 10.0.2.255 dev eth0
+ip addr add 10.0.2.15/255.255.255.0 dev eth0 
+ip route add default via 10.0.2.1 
 ```
+
+Then, ping the host to see the final result:
+
+```sh
+ping 10.0.2.2
+```
+
 
 For details about the Rust support, see https://rust-for-linux.com.
 
